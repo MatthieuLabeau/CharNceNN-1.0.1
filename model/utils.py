@@ -1,8 +1,23 @@
 # Ideas from https://danijar.com/variable-sequence-lengths-in-tensorflow/
 # and from https://github.com/carpedm20/lstm-char-cnn-tensorflow/blob/master/models/ops.py
 ## =======================================================================================
+import numpy as np
 import tensorflow as tf
 
+def _compute_ranged_scores(scores,
+                           labels,
+                           mask,
+                           ranges):
+    outputs = []
+    for i in range(len(ranges) - 1):
+        inBool = tf.logical_and(tf.greater_equal(labels, ranges[i]),tf.less(labels, ranges[i+1]))
+        inFloat = tf.cast(inBool, 'float32')
+        inInt = tf.cast(inBool, 'int64') 
+        lengths = tf.cast(tf.maximum( tf.reduce_sum(tf.multiply(inInt, mask), 1), tf.ones(scores.get_shape().as_list()[0], dtype = 'int64')), 'float32')
+        range_scores = tf.reduce_sum(tf.multiply(inFloat, scores), 1) / lengths
+        outputs.append(tf.reduce_mean(range_scores))
+    return outputs
+    
 class batch_norm(object):
     def __init__(self, epsilon=1e-5, momentum = 0.1, name="batch_norm"):
         with tf.variable_scope(name) as scope:
@@ -50,7 +65,7 @@ def highway(embeddings, tr_weight_list, tr_bias_list, gate_weight_list, gate_bia
     return output
 
 def word_char_gate(w_embeddings, c_embeddings, W_g, b_g):
-    embeddings = tf.concat(1, [w_embeddings, c_embeddings])
+    embeddings = tf.concat(axis=1, values=[w_embeddings, c_embeddings])
     transform_gate = tf.sigmoid(tf.matmul(embeddings, W_g) + b_g)
     output = transform_gate * w_embeddings + (1. - transform_gate) * c_embeddings
     return output
@@ -73,7 +88,7 @@ def CE(char_embeddings, filter_list, pooling_f = tf.nn.max_pool):
         filtered = tf.reshape(tf.squeeze(pool), [shape[0], -1])
         outputs.append(filtered)
     if len(filter_list) > 1:
-        output = tf.concat(1, outputs)
+        output = tf.concat(axis=1, values=outputs)
     else:
         output = outputs[0]
     return output
@@ -90,12 +105,17 @@ def CE_RNN(char_embeddings, cell_fw, cell_bw, mask, name = "biRNN"):
     batch_indexes = tf.cast(tf.range(shape[0]),'int64')
     length_indexes = tf.maximum(mask - 1, 0)
     indexes = length_indexes + shape[1] * batch_indexes
-    output = tf.gather(tf.reshape(tf.concat(2,
-                                            [c_input_emb_fw, c_input_emb_bw]),
+    output = tf.gather(tf.reshape(tf.concat(axis=2,
+                                            values=[c_input_emb_fw, c_input_emb_bw]),
                                   [shape[0] * shape[1], -1]),
                        indexes)
     return output
 
 def restrict_voc(samples, threshold):
-    samples_clipped = tf.select(tf.less(samples,threshold), samples, tf.ones_like(samples))
+    samples_clipped = tf.where(tf.less(samples,threshold), samples, tf.ones_like(samples))
     return samples_clipped
+
+def restrict_voc_map(samples, eval_emb_map):
+    s = tf.cast(samples, tf.int32)
+    return tf.gather(eval_emb_map, s)
+
